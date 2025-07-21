@@ -40,5 +40,4 @@ def detect():
     blocks = detect_text_blocks(image)
     return jsonify({"blocks": blocks})
 
-if __name__ == "__main__":
-    app.run(debug=True)
+
