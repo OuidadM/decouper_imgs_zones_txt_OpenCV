@@ -1,6 +1,9 @@
 services:
   - type: web
-    name: image-text-detector
+    name: img-to-blocks
     env: python
-    buildCommand: pip install -r requirements.txt
+    region: oregon
+    plan: free
+    buildCommand: ""
     startCommand: python app.py
+    runtime: python
