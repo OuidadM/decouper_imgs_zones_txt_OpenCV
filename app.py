@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify
+from typing import List, Tuple
 import cv2
 import numpy as np
 import base64
 import openai
 import re
 import os
+
 
 app = Flask(__name__)
 
@@ -44,45 +46,78 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
     except Exception as e:
         return f"[Erreur OpenAI] {str(e)}"
 
-def detect_text_blocks(image_bytes):
+
+def detect_text_blocks(image_bytes, max_width=1000, max_height=1000, concat_direction='vertical'):
+    """
+    Détecte les blocs de texte dans une image et retourne un nombre limité de blocs traduits.
+    Peut concaténer plusieurs blocs ensemble (verticalement ou horizontalement).
+    """
+    # Chargement de l’image
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+    # 🔧 Redimensionnement si l'image est trop grande
+    h, w = img.shape[:2]
+    if w > max_width or h > max_height:
+        scaling_factor = min(max_width / w, max_height / h)
+        new_size = (int(w * scaling_factor), int(h * scaling_factor))
+        img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+    # Passage en niveaux de gris
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Binarisation adaptative
-    threshed = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                     cv2.THRESH_BINARY_INV, 15, 10)
+    # Binarisation adaptative
+    threshed = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV, 15, 10
+    )
 
-    # 2. Morphologie – kernel plus fin pour du texte arabe dense
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 4))
+    # Dilatation pour détecter les zones de texte
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 5))
     morphed = cv2.dilate(threshed, kernel, iterations=1)
 
-    # 3. Détection des contours
+    # Contours
     contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    blocks = []
+    # Détection des blocs
+    candidate_blocks = []
+    
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-
-        # 4. Filtrage plus souple des zones textuelles
-        aspect_ratio = w / h
-        if 60 < w < img.shape[1] and 20 < h < img.shape[0] // 2 and 1.0 < aspect_ratio < 15.0:
+        if w > 80 and h > 20 and h < img.shape[0] * 0.5 and w < img.shape[1] * 0.95:
             crop = img[y:y+h, x:x+w]
-            _, buffer = cv2.imencode('.jpg', crop)
-            encoded = base64.b64encode(buffer).decode()
+            candidate_blocks.append((x, y, crop))
 
-            blocks.append({
-                "x": int(x),
-                "y": int(y),
-                "w": int(w),
-                "h": int(h),
-                "image": f"data:image/jpeg;base64,{encoded}"
-            })
+    # Tri des blocs par position (haut → bas, gauche → droite)
+    candidate_blocks.sort(key=lambda b: (b[1], -b[0]))
 
-    # 5. Tri des blocs par ordre de lecture (du haut vers le bas)
-    blocks = sorted(blocks, key=lambda b: b["y"])
+    # Concaténation des blocs
+    cropped_images = [block[2] for block in candidate_blocks]
 
-    return blocks
+    if not cropped_images:
+        return [{"error": "Aucun bloc de texte détecté"}]
+
+    try:
+        if concat_direction == 'vertical':
+            merged_image = cv2.vconcat(cropped_images)
+        else:
+            merged_image = cv2.hconcat(cropped_images)
+    except cv2.error as e:
+        return [{"error": f"Erreur de concaténation : {str(e)}"}]
+
+    # Encodage en base64
+    _, buffer = cv2.imencode('.jpg', merged_image)
+    encoded = base64.b64encode(buffer).decode()
+
+    # Traduction unique de l'image fusionnée
+    translated_text = translate_image_with_gpt4o(f"data:image/jpeg;base64,{encoded}", target_lang="French")
+
+    # Retour au format JSON
+    return [{
+        "merged_image": f"data:image/jpeg;base64,{encoded}",
+        "translation": translated_text
+    }]
+
 
 
 @app.route("/detect", methods=["POST"])
@@ -90,8 +125,9 @@ def detect():
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
     image = request.files["image"].read()
-    blocks = detect_text_blocks(image)
+    blocks = detect_text_blocks(image, concat_direction='vertical')  # ou 'horizontal'
     return jsonify({"blocks": blocks})
+
 
 
 if __name__ == "__main__":
