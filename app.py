@@ -44,53 +44,44 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
     except Exception as e:
         return f"[Erreur OpenAI] {str(e)}"
 
-
 def detect_text_blocks(image_bytes):
-    """
-    Détecte les blocs de texte dans une image et les retourne avec leur traduction.
-    """
-    # Chargement et prétraitement de l’image
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Binarisation adaptative pour supporter différents niveaux d’éclairage
-    threshed = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV, 15, 10
-    )
+    # 1. Binarisation adaptative
+    threshed = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                     cv2.THRESH_BINARY_INV, 15, 10)
 
-    # 2. Dilatation pour regrouper les mots sur une ligne
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 5))
+    # 2. Morphologie – kernel plus fin pour du texte arabe dense
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 4))
     morphed = cv2.dilate(threshed, kernel, iterations=1)
 
-    # 3. Détection des contours externes
+    # 3. Détection des contours
     contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     blocks = []
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
 
-        # 4. Filtrer les blocs non pertinents
-        if w > 80 and h > 20 and h < img.shape[0] * 0.5 and w < img.shape[1] * 0.95:
+        # 4. Filtrage plus souple des zones textuelles
+        aspect_ratio = w / h
+        if 60 < w < img.shape[1] and 20 < h < img.shape[0] // 2 and 1.0 < aspect_ratio < 15.0:
             crop = img[y:y+h, x:x+w]
             _, buffer = cv2.imencode('.jpg', crop)
             encoded = base64.b64encode(buffer).decode()
-
-            # Traduction avec GPT-4o
-            translated_text = translate_image_with_gpt4o(f"data:image/jpeg;base64,{encoded}", target_lang="French")
 
             blocks.append({
                 "x": int(x),
                 "y": int(y),
                 "w": int(w),
                 "h": int(h),
-                "image": f"data:image/jpeg;base64,{encoded}",
-                "translation": translated_text
+                "image": f"data:image/jpeg;base64,{encoded}"
             })
 
-    # 5. Tri des blocs de haut en bas puis de gauche à droite
-    blocks.sort(key=lambda b: (b["y"], b["x"]))
+    # 5. Tri des blocs par ordre de lecture (du haut vers le bas)
+    blocks = sorted(blocks, key=lambda b: b["y"])
+
     return blocks
 
 
