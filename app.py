@@ -18,7 +18,7 @@ def detect_text_blocks(image_bytes):
                                      cv2.THRESH_BINARY_INV, 15, 10)
 
     # 2. Morphologie pour connecter les zones de texte
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 7))  # Plus adapté à l'arabe
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
     morphed = cv2.dilate(threshed, kernel, iterations=1)
 
     # 3. Détection des contours
@@ -27,21 +27,11 @@ def detect_text_blocks(image_bytes):
     blocks = []
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-
+        
         # 4. Filtrage des zones non textuelles : dimensions minimales/maximales
         if 60 < w < img.shape[1] and 20 < h < img.shape[0] // 2:
-
+            # Ignorer les très grands blocs (ex. logos centrés ou en haut)
             crop = img[y:y+h, x:x+w]
-
-            # --- Option : Détection de tampon rouge pour ignorer ou séparer ---
-            hsv_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-            lower_red = np.array([0, 70, 50])
-            upper_red = np.array([10, 255, 255])
-            red_mask = cv2.inRange(hsv_crop, lower_red, upper_red)
-            red_ratio = cv2.countNonZero(red_mask) / (w * h)
-            if red_ratio > 0.2:
-               continue  # Trop de rouge → probablement un tampon, on ignore
-
             _, buffer = cv2.imencode('.jpg', crop)
             encoded = base64.b64encode(buffer).decode()
             blocks.append({
@@ -52,10 +42,8 @@ def detect_text_blocks(image_bytes):
                 "image": f"data:image/jpeg;base64,{encoded}"
             })
 
-    # 5. Tri des blocs pour respecter l'ordre de lecture arabe (haut → bas, droite → gauche)
-    blocks = sorted(blocks, key=lambda b: (b["y"], -b["x"]))
-
     return blocks
+
 
 @app.route("/detect", methods=["POST"])
 def detect():
@@ -64,3 +52,5 @@ def detect():
     image = request.files["image"].read()
     blocks = detect_text_blocks(image)
     return jsonify({"blocks": blocks})
+
+
