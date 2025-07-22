@@ -5,6 +5,7 @@ import base64
 import openai
 import re
 import os
+import math
 
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -17,7 +18,7 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
             messages=[
                 {
                     "role": "system",
-                    "content": f"Tu es un traducteur expert. Traduis uniquement le texte de l'image fournie en {target_lang}, sans ajouter de commentaires."
+                    "content": f"Tu es un traducteur expert. Traduis chaque ligne de texte présente dans l'image **une seule fois**, en {target_lang}. Ignore tout texte en double ou redondant. N'ajoute aucun commentaire.",
                 },
                 {
                     "role": "user",
@@ -60,22 +61,39 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
     morphed = cv2.dilate(threshed, kernel, iterations=2)
 
     contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidate_blocks = []
+
+    
+
+    # --- Extraction des blocs candidats depuis les contours ---
+    candidates_raw = []
 
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
         if w > 60 and h > 20 and h < img.shape[0] * 0.6 and w < img.shape[1] * 0.95:
-            # Ajouter marge pour éviter lettres coupées
             margin = 5
             x1 = max(x - margin, 0)
             y1 = max(y - margin, 0)
             x2 = min(x + w + margin, img.shape[1])
             y2 = min(y + h + margin, img.shape[0])
             crop = img[y1:y2, x1:x2]
-            candidate_blocks.append((x1, y1, crop))
+            candidates_raw.append((x1, y1, crop))
 
-    # Tri haut-bas, gauche-droite
-    candidate_blocks.sort(key=lambda b: (b[1], b[0]))
+    # --- Tri des blocs par position haut-gauche ---
+    candidates_raw.sort(key=lambda b: (b[1], b[0]))
+
+    # --- Suppression des doublons visuellement proches via distance euclidienne ---
+    candidate_blocks = []
+    seen_blocks = []
+    for x, y, crop in candidates_raw:
+        h, w = crop.shape[:2]
+        duplicate_found = False
+        for (px, py, ph, pw) in seen_blocks:
+            if abs(x - px) < 5 and abs(y - py) < 5 and abs(h - ph) < 5 and abs(w - pw) < 5:
+                duplicate_found = True
+                break
+        if not duplicate_found:
+            candidate_blocks.append((x, y, crop))
+            seen_blocks.append((x, y, h, w))
 
     if not candidate_blocks:
         return [{"error": "Aucun bloc de texte détecté"}]
@@ -101,9 +119,11 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
 
     _, buffer = cv2.imencode('.jpg', merged_image)
     encoded = base64.b64encode(buffer).decode()
+    cv2.imwrite("merged_debug.jpg", merged_image)
+
 
     translated_text = translate_image_with_gpt4o(f"data:image/jpeg;base64,{encoded}", target_lang="French")
-
+    
     return [{
         "merged_image": f"data:image/jpeg;base64,{encoded}",
         "translation": translated_text
