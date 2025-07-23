@@ -19,7 +19,7 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
                 {
                     "role": "system",
                     "content": (
-                        f"Tu es un traducteur expert. Ta tâche est de lire et traduire le texte visible dans une image, ligne par ligne, en {target_lang}. "
+                        f"Tu es un traducteur expert. Ta tâche est de lire et traduire le texte visible dans une image, chaque ligne de texte présente dans l'image **une seule fois**, en {target_lang}. Ignore tout texte en double ou redondant."
                         "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
                         "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
                     )
