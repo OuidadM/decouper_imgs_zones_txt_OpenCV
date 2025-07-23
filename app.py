@@ -126,6 +126,7 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
     
     return [{
         "merged_image": f"data:image/jpeg;base64,{encoded}",
+        "openAi_cle": openai.api_key,
         "translation": translated_text
     }]
 
