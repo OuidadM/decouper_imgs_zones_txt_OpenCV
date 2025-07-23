@@ -6,7 +6,6 @@ import openai
 import re
 import os
 
-
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -23,15 +22,14 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
                         "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
                         "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
                     )
-                }
-,
+                },
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_clean}"
+                                "url": f"data:image/png;base64,{base64_clean}"
                             }
                         }
                     ]
@@ -47,13 +45,11 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    # Redimensionnement si nécessaire
     h, w = img.shape[:2]
     if w > max_width or h > max_height:
         scaling_factor = min(max_width / w, max_height / h)
         img = cv2.resize(img, (int(w * scaling_factor), int(h * scaling_factor)), interpolation=cv2.INTER_AREA)
 
-    # Prétraitement plus doux
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     threshed = cv2.adaptiveThreshold(
@@ -61,17 +57,12 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
         cv2.THRESH_BINARY_INV, 17, 10
     )
 
-    # Détection douce des lignes
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
     morphed = cv2.dilate(threshed, kernel, iterations=2)
 
     contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    
-
-    # --- Extraction des blocs candidats depuis les contours ---
     candidates_raw = []
-
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
         if w > 60 and h > 20 and h < img.shape[0] * 0.6 and w < img.shape[1] * 0.95:
@@ -83,10 +74,8 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
             crop = img[y1:y2, x1:x2]
             candidates_raw.append((x1, y1, crop))
 
-    # --- Tri des blocs par position haut-gauche ---
     candidates_raw.sort(key=lambda b: (b[1], -b[0]))
 
-    # --- Suppression des doublons visuellement proches via distance euclidienne ---
     candidate_blocks = []
     seen_blocks = []
     for x, y, crop in candidates_raw:
@@ -103,7 +92,7 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
     if not candidate_blocks:
         return [{"error": "Aucun bloc de texte détecté"}]
 
-    # Normalisation
+    # --- Normalisation et concaténation ---
     cropped_images = []
     if concat_direction == 'vertical':
         target_width = max(b[2].shape[1] for b in candidate_blocks)
@@ -122,13 +111,18 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
             cropped_images.append(padded)
         merged_image = cv2.hconcat(cropped_images)
 
-    _, buffer = cv2.imencode('.jpg', merged_image)
+    # --- Netteté (filtrage) ---
+    sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    merged_image = cv2.filter2D(merged_image, -1, sharpen_kernel)
+
+    # --- Encodage PNG (meilleure qualité que JPEG) ---
+    _, buffer = cv2.imencode('.png', merged_image)
     encoded = base64.b64encode(buffer).decode()
-    
-    translated_text = translate_image_with_gpt4o(f"data:image/jpeg;base64,{encoded}", target_lang="French")
-    
+
+    translated_text = translate_image_with_gpt4o(f"data:image/png;base64,{encoded}", target_lang="French")
+
     return [{
-        "merged_image": f"data:image/jpeg;base64,{encoded}",
+        "merged_image": f"data:image/png;base64,{encoded}",
         "translation": translated_text
     }]
 
