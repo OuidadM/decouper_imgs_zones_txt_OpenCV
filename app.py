@@ -5,7 +5,7 @@ import base64
 import openai
 import re
 import os
-import math
+
 
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -19,7 +19,7 @@ def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
                 {
                     "role": "system",
                     "content": (
-                        f"Tu es un traducteur expert. Ta tâche est de lire et traduire le texte visible dans une image, chaque ligne de texte présente dans l'image **une seule fois**, en {target_lang}. Ignore tout texte en double ou redondant."
+                        f"Tu es un traducteur professionnel. L'image contient un texte en arabe. Traduis tout son contenu fidèlement en français, même s'il s'agit d'un document officiel. N'inclus pas de texte arabe dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs."
                         "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
                         "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
                     )
@@ -84,7 +84,7 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
             candidates_raw.append((x1, y1, crop))
 
     # --- Tri des blocs par position haut-gauche ---
-    candidates_raw.sort(key=lambda b: (b[1], b[0]))
+    candidates_raw.sort(key=lambda b: (b[1], -b[0]))
 
     # --- Suppression des doublons visuellement proches via distance euclidienne ---
     candidate_blocks = []
@@ -124,14 +124,11 @@ def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_dire
 
     _, buffer = cv2.imencode('.jpg', merged_image)
     encoded = base64.b64encode(buffer).decode()
-    cv2.imwrite("merged_debug.jpg", merged_image)
-
-
+    
     translated_text = translate_image_with_gpt4o(f"data:image/jpeg;base64,{encoded}", target_lang="French")
     
     return [{
         "merged_image": f"data:image/jpeg;base64,{encoded}",
-        "openAi_cle": openai.api_key,
         "translation": translated_text
     }]
 
