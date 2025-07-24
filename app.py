@@ -16,12 +16,16 @@ def translate_image_with_gpt4o(images, target_lang="French"):
             {
                 "role": "system",
                 "content": (
-                    f"Tu es un traducteur professionnel. L'image contient un texte en arabe. Traduis tout son contenu fidèlement en français, même s'il s'agit d'un document officiel. "
-                    f"N'inclus pas de texte arabe dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs. "
-                    "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
-                    "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
+                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
+                    "L'image contient du texte en arabe, probablement issu d'un document officiel du gouvernement marocain. "
+                    "Traduis fidèlement et exactement tous les éléments du texte original, en respectant le ton formel et administratif. "
+                    "Ne simplifie pas, ne reformule pas. Ne commente rien. "
+                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels tels quels. "
+                    "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
+                    f"La traduction doit être entièrement en {target_lang}. N'inclus pas de texte arabe. Ne reformule pas en langage courant."
                 )
-            },
+            }
+            ,
             {
                 "role": "user",
                 "content": images
