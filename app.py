@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-from docx import Document
 from azure.cognitiveservices.vision.computervision import ComputerVisionClient
 from azure.cognitiveservices.vision.computervision.models import OperationStatusCodes
 from msrest.authentication import CognitiveServicesCredentials
