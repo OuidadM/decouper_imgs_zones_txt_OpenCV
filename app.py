@@ -17,21 +17,30 @@ def translate_image_with_gpt4o(images, target_lang="French"):
                 "role": "system",
                 "content": (
                     "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                    "L'image contient du texte en arabe, probablement issu d'un document officiel du gouvernement marocain. "
-                    "Traduis fidèlement et exactement tous les éléments du texte original, en respectant le ton formel et administratif. "
+                    "Les images ci-jointes contiennent du texte en arabe, probablement issu de documents officiels. "
+                    "Traduis fidèlement et exactement tous les éléments du texte original en respectant le ton formel et administratif. "
                     "Ne simplifie pas, ne reformule pas. Ne commente rien. "
-                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels tels quels. "
+                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
                     "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
-                    f"La traduction doit être entièrement en {target_lang}. N'inclus pas de texte arabe. Ne reformule pas en langage courant."
+                    f"La traduction doit être entièrement en {target_lang}. "
+                    "N'inclus jamais le texte original en arabe. Ne laisse aucun passage non traduit."
                 )
-            }
-            ,
+            },
             {
                 "role": "user",
-                "content": images
+                "content": images + [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Traduis tout le texte visible sur ces images. "
+                            f"Fournis uniquement une traduction fidèle et complète en {target_lang}. "
+                            "N'inclus aucune portion de texte arabe dans la réponse."
+                        )
+                    }
+                ]
             }
         ],
-        max_tokens=1000,
+        max_tokens=2000,
     )
 
     return response.choices[0].message.content.strip()
