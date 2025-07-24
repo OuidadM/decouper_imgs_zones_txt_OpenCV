@@ -9,130 +9,68 @@ import os
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def translate_image_with_gpt4o(base64_image: str, target_lang: str = "French"):
-    base64_clean = re.sub("^data:image/.+;base64,", "", base64_image)
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"Tu es un traducteur professionnel. L'image contient un texte en arabe. Traduis tout son contenu fidèlement en français, même s'il s'agit d'un document officiel. N'inclus pas de texte arabe dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs."
-                        "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
-                        "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_clean}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=1000,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"[Erreur OpenAI] {str(e)}"
+def translate_image_with_gpt4o(images, target_lang="French"):
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"Tu es un traducteur professionnel. L'image contient un texte en arabe. Traduis tout son contenu fidèlement en français, même s'il s'agit d'un document officiel. "
+                    f"N'inclus pas de texte arabe dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs. "
+                    "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
+                    "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
+                )
+            },
+            {
+                "role": "user",
+                "content": images
+            }
+        ],
+        max_tokens=1000,
+    )
 
-def detect_text_blocks(image_bytes, max_width=1200, max_height=1200, concat_direction='vertical'):
+    return response.choices[0].message.content.strip()
+
+def detect_text_blocks(image_bytes, target_lang="French"):
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
     h, w = img.shape[:2]
-    if w > max_width or h > max_height:
-        scaling_factor = min(max_width / w, max_height / h)
-        img = cv2.resize(img, (int(w * scaling_factor), int(h * scaling_factor)), interpolation=cv2.INTER_AREA)
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    threshed = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV, 17, 10
-    )
+    # Diviser en 4 bandes horizontales égales
+    h_step = h // 4
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
-    morphed = cv2.dilate(threshed, kernel, iterations=2)
+    blocks = [
+        img[i*h_step:(i+1)*h_step, 0:w] for i in range(4)
+    ]
 
-    contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    image_prompts = []
 
-    candidates_raw = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if w > 60 and h > 20 and h < img.shape[0] * 0.6 and w < img.shape[1] * 0.95:
-            margin = 5
-            x1 = max(x - margin, 0)
-            y1 = max(y - margin, 0)
-            x2 = min(x + w + margin, img.shape[1])
-            y2 = min(y + h + margin, img.shape[0])
-            crop = img[y1:y2, x1:x2]
-            candidates_raw.append((x1, y1, crop))
+    for idx, block in enumerate(blocks):
+        _, buffer = cv2.imencode('.png', block)
+        encoded = base64.b64encode(buffer).decode("utf-8")
+        image_prompts.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{encoded}"
+            }
+        })
 
-    candidates_raw.sort(key=lambda b: (b[1], -b[0]))
-
-    candidate_blocks = []
-    seen_blocks = []
-    for x, y, crop in candidates_raw:
-        h, w = crop.shape[:2]
-        duplicate_found = False
-        for (px, py, ph, pw) in seen_blocks:
-            if abs(x - px) < 5 and abs(y - py) < 5 and abs(h - ph) < 5 and abs(w - pw) < 5:
-                duplicate_found = True
-                break
-        if not duplicate_found:
-            candidate_blocks.append((x, y, crop))
-            seen_blocks.append((x, y, h, w))
-
-    if not candidate_blocks:
-        return [{"error": "Aucun bloc de texte détecté"}]
-
-    # --- Normalisation et concaténation ---
-    cropped_images = []
-    if concat_direction == 'vertical':
-        target_width = max(b[2].shape[1] for b in candidate_blocks)
-        for _, _, crop in candidate_blocks:
-            h, w = crop.shape[:2]
-            pad_right = target_width - w
-            padded = cv2.copyMakeBorder(crop, 0, 0, 0, pad_right, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-            cropped_images.append(padded)
-        merged_image = cv2.vconcat(cropped_images)
-    else:
-        target_height = max(b[2].shape[0] for b in candidate_blocks)
-        for _, _, crop in candidate_blocks:
-            h, w = crop.shape[:2]
-            pad_bottom = target_height - h
-            padded = cv2.copyMakeBorder(crop, 0, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-            cropped_images.append(padded)
-        merged_image = cv2.hconcat(cropped_images)
-
-    # --- Netteté (filtrage) ---
-    sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    merged_image = cv2.filter2D(merged_image, -1, sharpen_kernel)
-
-    # --- Encodage PNG (meilleure qualité que JPEG) ---
-    _, buffer = cv2.imencode('.png', merged_image)
-    encoded = base64.b64encode(buffer).decode()
-
-    translated_text = translate_image_with_gpt4o(f"data:image/png;base64,{encoded}", target_lang="French")
-
-    return [{
-        "merged_image": f"data:image/png;base64,{encoded}",
+    # Envoi à GPT-4o avec tous les blocs dans un seul message
+    translated_text = translate_image_with_gpt4o(images=image_prompts, target_lang=target_lang)
+    return {
         "translation": translated_text
-    }]
+    }
+
 
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
     image = request.files["image"].read()
-    blocks = detect_text_blocks(image, concat_direction='vertical')
-    return jsonify({"blocks": blocks})
+    blocks=detect_text_blocks(image)
+    return jsonify(blocks)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
