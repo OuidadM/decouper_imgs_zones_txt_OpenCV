@@ -68,7 +68,9 @@ def translate_text_with_gpt4o(text, target_lang="French"):
     )
     return response.choices[0].message.content.strip()
 
-# Route principale
+@app.route("/")
+def index():
+    return "API OK - voir /votre-endpoint pour utiliser l'API"
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
