@@ -22,7 +22,7 @@ cv_client = ComputerVisionClient(AZURE_ENDPOINT, CognitiveServicesCredentials(AZ
 def extract_text_azure(image_bytes):
     image_stream = io.BytesIO(image_bytes)  # conversion en stream
 
-    response = cv_client.read_in_stream(image=image_stream, language="ar", raw=True)
+    response = cv_client.read_in_stream(image=image_stream, raw=True)
     operation_url = response.headers["Operation-Location"]
     operation_id = operation_url.split("/")[-1]
 
@@ -56,7 +56,7 @@ def translate_text_with_gpt4o(text, target_lang="French"):
                     "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
                     "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
                     f"La traduction doit être entièrement en {target_lang}. "
-                    "N'inclus jamais le texte original en arabe. Ne laisse aucun passage non traduit."
+                    "N'inclus jamais le texte original en langue originale. Ne laisse aucun passage non traduit."
                 )
             },
             {
@@ -77,17 +77,16 @@ def detect():
         return jsonify({"error": "Image file is missing"}), 400
 
     image_bytes = request.files["image"].read()
+    target_lang = request.args.get("lang", "French")
 
-    # OCR Azure
     extracted_text = extract_text_azure(image_bytes)
-
-    # Traduction GPT-4o
-    translated_text = translate_text_with_gpt4o(extracted_text)
+    translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
 
     return jsonify({
         "ocr_text": extracted_text,
         "translation": translated_text
     })
+
 
 # Lancer le serveur
 if __name__ == "__main__":
