@@ -25,6 +25,7 @@ def translate_image_with_gpt4o(images, target_lang="French"):
                         "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
                         f"Traduis fidèlement tous les éléments visibles de cette image en {target_lang}, sans reformulation ni omission. "
                         "Ne commente rien. Utilise un ton formel et juridique. "
+                        "Ta réponse doit contenir uniquement le texte traduit, sans introduction, sans conclusion, ni formule du type 'Voici la traduction'. Ne commente rien. Ne dis pas si tu peux ou ne peux pas traduire. Répond uniquement par le texte traduit."
                         "Si des parties sont illisibles, note-les comme [illisible]. N'inclus jamais le texte original. "
                         f"Réponds uniquement avec le texte traduit en {target_lang}."
                     )
