@@ -9,7 +9,7 @@ app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
-def translate_image_with_gpt4o(text, target_lang="French"):
+def translate_image_with_gpt4o(images, target_lang="French"):
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -17,7 +17,7 @@ def translate_image_with_gpt4o(text, target_lang="French"):
                 "role": "system",
                 "content": (
                     "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                    "Traduis fidèlement et exactement tous les éléments du texte original en respectant le ton formel et administratif. "
+                    "Traduis fidèlement et exactement tous les éléments du texte original de cette image en respectant le ton formel et administratif. "
                     f"Répond uniquement en {target_lang}."
                     "Ne simplifie pas, ne reformule pas, n'interprète rien, ne commente rien. "
                     "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
@@ -28,7 +28,7 @@ def translate_image_with_gpt4o(text, target_lang="French"):
             },
             {
                 "role": "user",
-                "content": text
+                "content": images
             }
         ],
         max_tokens=2000
