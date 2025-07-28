@@ -6,73 +6,86 @@ import openai
 import os
 
 app = Flask(__name__)
+
+# Récupération de la clé OpenAI depuis une variable d'environnement
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def translate_image_with_gpt4o(images, target_lang="French"):
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                    "Traduis fidèlement et exactement tous les éléments du texte original de cette image en respectant le ton formel et administratif. "
-                    f"Répond uniquement en {target_lang}."
-                    "Ne simplifie pas, ne reformule pas, n'interprète rien, ne commente rien. "
-                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
-                    "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
-                    f"La traduction doit être entièrement en {target_lang}. "
-                    "N'inclus jamais le texte original en langue originale. Ne laisse aucun passage non traduit."
-                )
-            },
-            {
-                "role": "user",
-                "content": images
-            }
-        ],
-        max_tokens=2000
-    )
-    return response.choices[0].message.content.strip()
+    """
+    Envoie les images au modèle GPT-4o pour une traduction directe.
+    """
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
+                        f"Traduis fidèlement tous les éléments visibles de cette image en {target_lang}, sans reformulation ni omission. "
+                        "Ne commente rien. Utilise un ton formel et juridique. "
+                        "Si des parties sont illisibles, note-les comme [illisible]. N'inclus jamais le texte original. "
+                        f"Réponds uniquement avec le texte traduit en {target_lang}."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": images
+                }
+            ],
+            max_tokens=2000,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        raise RuntimeError(f"Erreur GPT-4o : {str(e)}")
+
 
 def detect_text_blocks(image_bytes, target_lang="French"):
-    np_img = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+    """
+    Divise l'image en blocs horizontaux, encode en base64, et appelle la traduction.
+    """
+    try:
+        np_img = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    h, w = img.shape[:2]
-    h_step = h // 4
+        if img is None:
+            raise ValueError("Image invalide ou non décodable.")
 
-    # Découpage en 4 blocs horizontaux
-    blocks = [img[i*h_step:(i+1)*h_step, 0:w] for i in range(4)]
-    image_prompts = []
+        h, w = img.shape[:2]
+        h_step = h // 4
 
-    for idx, block in enumerate(blocks):
-        _, buffer = cv2.imencode('.png', block)
-        encoded = base64.b64encode(buffer).decode("utf-8")
-        image_prompts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{encoded}"
-            }
-        })
+        blocks = [img[i * h_step:(i + 1) * h_step, 0:w] for i in range(4)]
+        image_prompts = []
 
-        # Décommenter si tu veux enregistrer les blocs localement pour debug
-        # cv2.imwrite(f"block_{idx+1}.png", block)
+        for idx, block in enumerate(blocks):
+            _, buffer = cv2.imencode('.png', block)
+            encoded = base64.b64encode(buffer).decode("utf-8")
+            image_prompts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{encoded}"
+                }
+            })
 
-    translated_text = translate_image_with_gpt4o(images=image_prompts, target_lang=target_lang)
+        translated_text = translate_image_with_gpt4o(images=image_prompts, target_lang=target_lang)
 
-    return {
-        "translation": translated_text
-    }
+        return {"translation": translated_text}
+
+    except Exception as e:
+        raise RuntimeError(f"Erreur lors de la détection ou de l'encodage : {str(e)}")
 
 
 @app.route("/")
 def index():
-    return "API OK - POST une image vers /detect pour la traduction."
+    return "✅ API OK - Envoyez une image POST vers /detect"
 
 
 @app.route("/detect", methods=["POST"])
 def detect():
+    """
+    Endpoint principal pour recevoir une image, la découper, et retourner la traduction.
+    """
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
 
@@ -87,4 +100,5 @@ def detect():
 
 
 if __name__ == "__main__":
+    # PORT paramétrable pour compatibilité avec Render, etc.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
