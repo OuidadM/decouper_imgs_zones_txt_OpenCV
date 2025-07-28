@@ -1,105 +1,93 @@
 from flask import Flask, request, jsonify
-import cv2
-import numpy as np
-import base64
+from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+from azure.cognitiveservices.vision.computervision.models import OperationStatusCodes
+from msrest.authentication import CognitiveServicesCredentials
 import openai
 import os
+import io  
+import time
 
+# Initialisation de Flask et des variables d'environnement
 app = Flask(__name__)
 
-# Récupération de la clé OpenAI depuis une variable d'environnement
+# Clés API
+AZURE_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT")
+AZURE_KEY = os.getenv("AZURE_VISION_KEY")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Client Azure Computer Vision
+cv_client = ComputerVisionClient(AZURE_ENDPOINT, CognitiveServicesCredentials(AZURE_KEY))
 
-def translate_image_with_gpt4o(images, target_lang="French"):
-    """
-    Envoie les images au modèle GPT-4o pour une traduction directe.
-    """
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                        f"Traduis fidèlement tous les éléments visibles de cette image en {target_lang}, sans reformulation ni omission. "
-                        "Ne commente rien. Utilise un ton formel et juridique. "
-                        "Ta réponse doit contenir uniquement le texte traduit, sans introduction, sans conclusion, ni formule du type 'Voici la traduction'. Ne commente rien. Ne dis pas si tu peux ou ne peux pas traduire. Répond uniquement par le texte traduit."
-                        "Si des parties sont illisibles, note-les comme [illisible]. N'inclus jamais le texte original. "
-                        f"Réponds uniquement avec le texte traduit en {target_lang}."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": images
-                }
-            ],
-            max_tokens=2000,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        raise RuntimeError(f"Erreur GPT-4o : {str(e)}")
+# Fonction : OCR avec Azure Read API
+def extract_text_azure(image_bytes):
+    image_stream = io.BytesIO(image_bytes)  # conversion en stream
+
+    response = cv_client.read_in_stream(image=image_stream, raw=True)
+    operation_url = response.headers["Operation-Location"]
+    operation_id = operation_url.split("/")[-1]
+
+    while True:
+        result = cv_client.get_read_result(operation_id)
+        if result.status not in [OperationStatusCodes.running, OperationStatusCodes.not_started]:
+            break
+        time.sleep(1)
+
+    extracted_lines = []
+    if result.status == OperationStatusCodes.succeeded:
+        for page in result.analyze_result.read_results:
+            for line in page.lines:
+                extracted_lines.append(line.text)
+
+    return "\n".join(extracted_lines)
 
 
-def detect_text_blocks(image_bytes, target_lang="French"):
-    """
-    Divise l'image en blocs horizontaux, encode en base64, et appelle la traduction.
-    """
-    try:
-        np_img = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Image invalide ou non décodable.")
-
-        h, w = img.shape[:2]
-        h_step = h // 4
-
-        blocks = [img[i * h_step:(i + 1) * h_step, 0:w] for i in range(4)]
-        image_prompts = []
-
-        for idx, block in enumerate(blocks):
-            _, buffer = cv2.imencode('.png', block)
-            encoded = base64.b64encode(buffer).decode("utf-8")
-            image_prompts.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{encoded}"
-                }
-            })
-
-        translated_text = translate_image_with_gpt4o(images=image_prompts, target_lang=target_lang)
-
-        return {"translation": translated_text}
-
-    except Exception as e:
-        raise RuntimeError(f"Erreur lors de la détection ou de l'encodage : {str(e)}")
-
+# Fonction : Traduction avec GPT-4o
+def translate_text_with_gpt4o(text, target_lang="French"):
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
+                    "Traduis fidèlement et exactement tous les éléments du texte original en respectant le ton formel et administratif. "
+                    f"Répond uniquement en {target_lang}."
+                    "Ne simplifie pas, ne reformule pas, n'interprète rien, ne commente rien. "
+                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
+                    "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
+                    f"La traduction doit être entièrement en {target_lang}. "
+                    "N'inclus jamais le texte original en langue originale. Ne laisse aucun passage non traduit."
+                )
+            },
+            {
+                "role": "user",
+                "content": text
+            }
+        ],
+        max_tokens=2000
+    )
+    return response.choices[0].message.content.strip()
 
 @app.route("/")
 def index():
-    return "✅ API OK - Envoyez une image POST vers /detect"
-
-
+    return "API OK - voir /votre-endpoint pour utiliser l'API"
 @app.route("/detect", methods=["POST"])
 def detect():
-    """
-    Endpoint principal pour recevoir une image, la découper, et retourner la traduction.
-    """
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
 
     image_bytes = request.files["image"].read()
     target_lang = request.args.get("lang", "French")
 
-    try:
-        result = detect_text_blocks(image_bytes, target_lang)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    extracted_text = extract_text_azure(image_bytes)
+    translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
+
+    return jsonify({
+        "ocr_text": extracted_text,
+        "translation": translated_text
+    })
 
 
+# Lancer le serveur
 if __name__ == "__main__":
-    # PORT paramétrable pour compatibilité avec Render, etc.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
