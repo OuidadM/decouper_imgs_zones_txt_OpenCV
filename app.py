@@ -9,29 +9,31 @@ app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
-def translate_image_with_gpt4o(images, target_lang="French"):
+def translate_image_with_gpt4o(text, target_lang="French"):
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    f"Tu es un traducteur professionnel. Traduis tout son contenu fidèlement en {target_lang}, même s'il s'agit d'un document officiel. "
-                    f"N'inclus pas de texte de langue originale dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs. "
-                    "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
-                    "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
+                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
+                    "Traduis fidèlement et exactement tous les éléments du texte original en respectant le ton formel et administratif. "
+                    f"Répond uniquement en {target_lang}."
+                    "Ne simplifie pas, ne reformule pas, n'interprète rien, ne commente rien. "
+                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
+                    "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
+                    f"La traduction doit être entièrement en {target_lang}. "
+                    "N'inclus jamais le texte original en langue originale. Ne laisse aucun passage non traduit."
                 )
             },
             {
                 "role": "user",
-                "content": images
+                "content": text
             }
         ],
-        max_tokens=1000,
+        max_tokens=2000
     )
-
     return response.choices[0].message.content.strip()
-
 
 def detect_text_blocks(image_bytes, target_lang="French"):
     np_img = np.frombuffer(image_bytes, np.uint8)
