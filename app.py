@@ -1,76 +1,74 @@
 from flask import Flask, request, jsonify
-from azure.cognitiveservices.vision.computervision import ComputerVisionClient
-from azure.cognitiveservices.vision.computervision.models import OperationStatusCodes
-from msrest.authentication import CognitiveServicesCredentials
+import cv2
+import numpy as np
+import base64
 import openai
 import os
-import io  
-import time
 
-# Initialisation de Flask et des variables d'environnement
 app = Flask(__name__)
-
-# Clés API
-AZURE_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT")
-AZURE_KEY = os.getenv("AZURE_VISION_KEY")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Client Azure Computer Vision
-cv_client = ComputerVisionClient(AZURE_ENDPOINT, CognitiveServicesCredentials(AZURE_KEY))
 
-# Fonction : OCR avec Azure Read API
-def extract_text_azure(image_bytes):
-    image_stream = io.BytesIO(image_bytes)  # conversion en stream
-
-    response = cv_client.read_in_stream(image=image_stream, raw=True)
-    operation_url = response.headers["Operation-Location"]
-    operation_id = operation_url.split("/")[-1]
-
-    while True:
-        result = cv_client.get_read_result(operation_id)
-        if result.status not in [OperationStatusCodes.running, OperationStatusCodes.not_started]:
-            break
-        time.sleep(1)
-
-    extracted_lines = []
-    if result.status == OperationStatusCodes.succeeded:
-        for page in result.analyze_result.read_results:
-            for line in page.lines:
-                extracted_lines.append(line.text)
-
-    return "\n".join(extracted_lines)
-
-
-# Fonction : Traduction avec GPT-4o
-def translate_text_with_gpt4o(text, target_lang="French"):
+def translate_image_with_gpt4o(images, target_lang="French"):
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                    "Traduis fidèlement et exactement tous les éléments du texte original en respectant le ton formel et administratif. "
-                    f"Répond uniquement en {target_lang}."
-                    "Ne simplifie pas, ne reformule pas, n'interprète rien, ne commente rien. "
-                    "Conserve la structure logique, les noms propres, les dates, les références de décrets, et les termes juridiques ou institutionnels. "
-                    "Évite toute approximation. Si une date ou un nom n'est pas lisible, indique [illisible] sans essayer de le deviner. "
-                    f"La traduction doit être entièrement en {target_lang}. "
-                    "N'inclus jamais le texte original en langue originale. Ne laisse aucun passage non traduit."
+                    f"Tu es un traducteur professionnel. Traduis tout son contenu fidèlement en {target_lang}, même s'il s'agit d'un document officiel. "
+                    f"N'inclus pas de texte de langue originale dans ta réponse, uniquement la version traduite en {target_lang}. Ignore les doublons visuels ou décoratifs. "
+                    "L'image ne contient ni personnes, ni visages, ni informations personnelles. "
+                    "Ignore les éléments graphiques. Ne commente rien. Fournis uniquement la traduction du texte présent."
                 )
             },
             {
                 "role": "user",
-                "content": text
+                "content": images
             }
         ],
-        max_tokens=2000
+        max_tokens=1000,
     )
+
     return response.choices[0].message.content.strip()
+
+
+def detect_text_blocks(image_bytes, target_lang="French"):
+    np_img = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+    h, w = img.shape[:2]
+    h_step = h // 4
+
+    # Découpage en 4 blocs horizontaux
+    blocks = [img[i*h_step:(i+1)*h_step, 0:w] for i in range(4)]
+    image_prompts = []
+
+    for idx, block in enumerate(blocks):
+        _, buffer = cv2.imencode('.png', block)
+        encoded = base64.b64encode(buffer).decode("utf-8")
+        image_prompts.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{encoded}"
+            }
+        })
+
+        # Décommenter si tu veux enregistrer les blocs localement pour debug
+        # cv2.imwrite(f"block_{idx+1}.png", block)
+
+    translated_text = translate_image_with_gpt4o(images=image_prompts, target_lang=target_lang)
+
+    return {
+        "translation": translated_text
+    }
+
 
 @app.route("/")
 def index():
-    return "API OK - voir /votre-endpoint pour utiliser l'API"
+    return "API OK - POST une image vers /detect pour la traduction."
+
+
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
@@ -79,15 +77,12 @@ def detect():
     image_bytes = request.files["image"].read()
     target_lang = request.args.get("lang", "French")
 
-    extracted_text = extract_text_azure(image_bytes)
-    translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
-
-    return jsonify({
-        "ocr_text": extracted_text,
-        "translation": translated_text
-    })
+    try:
+        result = detect_text_blocks(image_bytes, target_lang)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# Lancer le serveur
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
