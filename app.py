@@ -92,7 +92,8 @@ def detect():
 
     return jsonify({
         "ocr_text": extracted_text,
-        "translation": translated_text
+        "translation": translated_text,
+        "langue":target_lang
     })
 
 
