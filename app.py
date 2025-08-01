@@ -6,7 +6,6 @@ import openai
 import os
 import io  
 import time
-import gc
 
 # Initialisation de Flask et des variables d'environnement
 app = Flask(__name__)
@@ -43,7 +42,7 @@ def extract_text_azure(image_bytes):
 
 
 # Fonction : Traduction avec GPT-4o
-def translate_text_with_gpt4o(text, target_lang="Spanish"):
+def translate_text_with_gpt4o(text, target_lang="French"):
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -78,16 +77,11 @@ def index():
     return "API OK - voir /votre-endpoint pour utiliser l'API"
 @app.route("/detect", methods=["POST"])
 def detect():
-    gc.collect()
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
 
     image_bytes = request.files["image"].read()
-    file_name=request.args.get("nomFichier", "")
-    if file_name.startswith("FR_"):
-        target_lang="French" 
-    else :
-        target_lang="Spanish"    
+    target_lang = request.args.get("lang", "French")
 
     extracted_text = extract_text_azure(image_bytes)
     translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
