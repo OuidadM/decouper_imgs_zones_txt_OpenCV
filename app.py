@@ -43,7 +43,7 @@ def extract_text_azure(image_bytes):
 
 
 # Fonction : Traduction avec GPT-4o
-def translate_text_with_gpt4o(text, target_lang="French"):
+def translate_text_with_gpt4o(text, target_lang="Spanish"):
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -83,7 +83,11 @@ def detect():
         return jsonify({"error": "Image file is missing"}), 400
 
     image_bytes = request.files["image"].read()
-    target_lang = request.args.get("lang", "French")
+    file_name=request.args.get("nomFichier", "")
+    if file_name.startswith("FR_"):
+        target_lang="Français" 
+    else :
+        target_lang="Espagnol"    
 
     extracted_text = extract_text_azure(image_bytes)
     translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
