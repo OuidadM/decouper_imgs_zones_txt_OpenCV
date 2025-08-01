@@ -85,9 +85,9 @@ def detect():
     image_bytes = request.files["image"].read()
     file_name=request.args.get("nomFichier", "")
     if file_name.startswith("FR_"):
-        target_lang="Français" 
+        target_lang="French" 
     else :
-        target_lang="Espagnol"    
+        target_lang="Spanish"    
 
     extracted_text = extract_text_azure(image_bytes)
     translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
