@@ -6,6 +6,7 @@ import openai
 import os
 import io  
 import time
+import gc
 
 # Initialisation de Flask et des variables d'environnement
 app = Flask(__name__)
@@ -77,6 +78,7 @@ def index():
     return "API OK - voir /votre-endpoint pour utiliser l'API"
 @app.route("/detect", methods=["POST"])
 def detect():
+    gc.collect()
     if "image" not in request.files:
         return jsonify({"error": "Image file is missing"}), 400
 
