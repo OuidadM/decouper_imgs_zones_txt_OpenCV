@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: img-to-blocks
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: startCommand: gunicorn app:app --bind 0.0.0.0:10000
+    runtime: python
