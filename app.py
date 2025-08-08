@@ -1,102 +1,115 @@
-from flask import Flask, request, jsonify
-from azure.cognitiveservices.vision.computervision import ComputerVisionClient
-from azure.cognitiveservices.vision.computervision.models import OperationStatusCodes
-from msrest.authentication import CognitiveServicesCredentials
-import openai
-import os
-import io  
-import time
+from flask import Flask, request, send_file, jsonify
+import requests, base64, os, io
+from markdown2 import markdown as md2html
+from bs4 import BeautifulSoup
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# Initialisation de Flask et des variables d'environnement
+
 app = Flask(__name__)
 
-# Clés API
-AZURE_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT")
-AZURE_KEY = os.getenv("AZURE_VISION_KEY")
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Client Azure Computer Vision
-cv_client = ComputerVisionClient(AZURE_ENDPOINT, CognitiveServicesCredentials(AZURE_KEY))
-
-# Fonction : OCR avec Azure Read API
-def extract_text_azure(image_bytes):
-    image_stream = io.BytesIO(image_bytes)  # conversion en stream
-
-    response = cv_client.read_in_stream(image=image_stream, raw=True)
-    operation_url = response.headers["Operation-Location"]
-    operation_id = operation_url.split("/")[-1]
-
-    while True:
-        result = cv_client.get_read_result(operation_id)
-        if result.status not in [OperationStatusCodes.running, OperationStatusCodes.not_started]:
-            break
-        time.sleep(1)
-
-    extracted_lines = []
-    if result.status == OperationStatusCodes.succeeded:
-        for page in result.analyze_result.read_results:
-            for line in page.lines:
-                extracted_lines.append(line.text)
-
-    return "\n".join(extracted_lines)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
-# Fonction : Traduction avec GPT-4o
-def translate_text_with_gpt4o(text, target_lang="Spanish"):
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Tu es un traducteur professionnel spécialisé dans la traduction officielle de documents administratifs et juridiques. "
-                    "Traduis fidèlement et exactement tout le contenu fourni, en respectant le ton formel et administratif. "
-                    f"Ta réponse doit être exclusivement en {target_lang}. "
-                    "Ne simplifie rien, ne reformule rien, ne commente rien. "
-                    "Conserve la structure logique, les noms propres, les dates, les références de lois ou de décrets, et tous les termes juridiques ou institutionnels. "
-                    "Évite toute approximation. Si une partie du texte est illisible ou incohérente, indique [illisible] sans rien inventer. "
-                    "Chaque mot et chaque phrase du texte doivent être traduits. "
-                    "Aucun passage, même partiel, ne doit rester dans la langue originale. "
-                    "Il est strictement interdit de conserver du texte non traduit. "
-                    f"La traduction doit être complète, fidèle et entièrement rédigée en {target_lang}, sans exception. "
-                    "Ne commence pas ta réponse par 'Voici la traduction' ni aucune formule explicative. Réponds uniquement avec la traduction directe, sans commentaire ni introduction."
-                )
+def add_markdown_to_docx(markdown_text,temp_file, append=False):
+    html = md2html(markdown_text)
+    soup = BeautifulSoup(html, "html.parser")
 
-            },
+    # Charger doc existant ou nouveau
+    if append and os.path.exists(temp_file):
+        doc = Document(temp_file)
+        doc.add_page_break()
+    else:
+        doc = Document()
+
+    for elem in soup.children:
+        if elem.name == "h1":
+            p = doc.add_paragraph(elem.get_text())
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.runs[0]
+            run.bold = True
+            run.font.size = Pt(14)
+
+        elif elem.name == "p":
+            text = elem.get_text()
+            p = doc.add_paragraph(text)
+            if text.startswith(">") or "[ALIGN=right]" in text:
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            elif text.startswith("[ALIGN=center]"):
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        elif elem.name == "ul":
+            for li in elem.find_all("li"):
+                doc.add_paragraph(li.get_text(), style="List Bullet")
+
+        elif elem.name == "ol":
+            for li in elem.find_all("li"):
+                doc.add_paragraph(li.get_text(), style="List Number")
+
+    doc.save(temp_file)
+    return temp_file
+
+@app.route("/traduire", methods=["POST"])
+def translate():
+    if "image" not in request.files:
+        return jsonify({"error": "Image manquante"}), 400
+    image_bytes = request.files["image"].read()
+    nom = request.args.get("nomFichier", "document")
+    langue = "français" if nom.startswith("FR_") else "espagnol"
+    bundle_index = int(request.args.get("bundle", "1"))
+    temp_file = f"{nom}.docx"  # Fichier temporaire pour accumuler les pages
+
+    # Encodage image
+    image_data = base64.b64encode(image_bytes).decode("utf-8")
+
+    # Prompt
+    prompt_text = f"""
+Voici une image d'un document administratif multilingue (français, arabe, anglais).
+Traduis fidèlement tout le contenu visible en {langue}.
+Respecte exactement la structure visuelle. Ne saute aucun élément.
+"""
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": "https://test.local",
+        "X-Title": "Traduction Document",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "anthropic/claude-3.5-sonnet",
+        "max_tokens": 800,
+        "messages": [
             {
                 "role": "user",
-                "content": text
+                "content": [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                ]
             }
-        ],
-        max_tokens=2000
-    )
-    return response.choices[0].message.content.strip()
+        ]
+    }
 
-@app.route("/")
-def index():
-    return "API OK - voir /votre-endpoint pour utiliser l'API"
-@app.route("/detect", methods=["POST"])
-def detect():
-    if "image" not in request.files:
-        return jsonify({"error": "Image file is missing"}), 400
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+    data = response.json()
 
-    image_bytes = request.files["image"].read()
-    file_name = request.args.get("nomFichier", "")
-    target_lang="Spanish"
-    if file_name.startswith("FR_"):
-        target_lang = "French"
-    else :
-        target_lang = "Spanish"
-    extracted_text = extract_text_azure(image_bytes)
-    translated_text = translate_text_with_gpt4o(extracted_text, target_lang)
+    if "choices" not in data:
+        return jsonify({"error": "Erreur API", "details": data}), 500
 
-    return jsonify({
-        "ocr_text": extracted_text,
-        "translation": translated_text,
-        "langue":target_lang
-    })
+    markdown_text = data["choices"][0]["message"]["content"]
 
+    # Ajout dans le docx
+    temp_file_path = add_markdown_to_docx(markdown_text,temp_file, append=(bundle_index > 1))
 
-# Lancer le serveur
+    # Si dernier bundle → renvoyer le fichier complet
+    is_last = request.args.get("last", "false").lower() == "true"
+    if is_last:
+        return send_file(temp_file_path, as_attachment=True, download_name="traduction.docx")
+
+    return jsonify({"status": f"Page {bundle_index} ajoutée avec succès."})
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000)
