@@ -109,7 +109,10 @@ Respecte exactement la structure visuelle. Ne saute aucun élément.
     if is_last:
         return send_file(temp_file_path, as_attachment=True, download_name="traduction.docx")
 
-    return jsonify({"status": f"Page {bundle_index} ajoutée avec succès."})
+    return jsonify({
+        "status": f"Page {bundle_index} ajoutée avec succès.",
+        "langue": langue
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
