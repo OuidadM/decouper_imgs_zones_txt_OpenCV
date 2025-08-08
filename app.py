@@ -1,66 +1,20 @@
-from flask import Flask, request, send_file, jsonify
-import requests, base64, os, io
+from flask import Flask, request, jsonify
+import requests, base64, os
 from markdown2 import markdown as md2html
-from bs4 import BeautifulSoup
-from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 
 app = Flask(__name__)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-
-def add_markdown_to_docx(markdown_text,temp_file, append=False):
-    html = md2html(markdown_text)
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Charger doc existant ou nouveau
-    if append and os.path.exists(temp_file):
-        doc = Document(temp_file)
-        doc.add_page_break()
-    else:
-        doc = Document()
-
-    for elem in soup.children:
-        if elem.name == "h1":
-            p = doc.add_paragraph(elem.get_text())
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.runs[0]
-            run.bold = True
-            run.font.size = Pt(14)
-
-        elif elem.name == "p":
-            text = elem.get_text()
-            p = doc.add_paragraph(text)
-            if text.startswith(">") or "[ALIGN=right]" in text:
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            elif text.startswith("[ALIGN=center]"):
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            else:
-                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-        elif elem.name == "ul":
-            for li in elem.find_all("li"):
-                doc.add_paragraph(li.get_text(), style="List Bullet")
-
-        elif elem.name == "ol":
-            for li in elem.find_all("li"):
-                doc.add_paragraph(li.get_text(), style="List Number")
-
-    doc.save(temp_file)
-    return temp_file
-
 @app.route("/traduire", methods=["POST"])
 def translate():
     if "image" not in request.files:
         return jsonify({"error": "Image manquante"}), 400
+    
     image_bytes = request.files["image"].read()
     nom = request.args.get("nomFichier", "document")
     langue = "français" if nom.startswith("FR_") else "espagnol"
     bundle_index = int(request.args.get("bundle", "1"))
-    temp_file = f"{nom}.docx"  # Fichier temporaire pour accumuler les pages
 
     # Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
@@ -70,6 +24,7 @@ def translate():
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
 Traduis fidèlement tout le contenu visible en {langue}.
 Respecte exactement la structure visuelle. Ne saute aucun élément.
+Retourne le texte au format Markdown clair et structuré.
 """
 
     headers = {
@@ -101,17 +56,17 @@ Respecte exactement la structure visuelle. Ne saute aucun élément.
 
     markdown_text = data["choices"][0]["message"]["content"]
 
-    # Ajout dans le docx
-    temp_file_path = add_markdown_to_docx(markdown_text,temp_file, append=(bundle_index > 1))
+    # Convertir Markdown → HTML (Google Docs Create Document attend du HTML)
+    html_content = md2html(markdown_text)
 
-    # Si dernier bundle → renvoyer le fichier complet
+    # Vérifier si c'est le dernier bundle
     is_last = request.args.get("last", "false").lower() == "true"
-    if is_last:
-        return send_file(temp_file_path, as_attachment=True, download_name="traduction.docx")
 
     return jsonify({
-        "status": f"Page {bundle_index} ajoutée avec succès.",
-        "langue": langue
+        "status": f"Page {bundle_index} traitée",
+        "langue": langue,
+        "is_last": is_last,
+        "html": html_content
     })
 
 if __name__ == "__main__":
