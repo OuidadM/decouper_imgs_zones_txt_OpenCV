@@ -2,5 +2,7 @@ Flask==3.1.1
 gunicorn
 requests
 python-docx
+openai>=1.16.0,<2.0.0
+azure-cognitiveservices-vision-computervision==0.9.1
 azure-common==1.1.28
 azure-core==1.35.0
