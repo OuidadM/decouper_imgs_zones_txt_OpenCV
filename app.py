@@ -8,6 +8,7 @@ import os
 import io
 import time
 import base64
+import re
 
 app = Flask(__name__)
 
@@ -55,7 +56,7 @@ def translate():
     # 2️⃣ Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-    # 3️⃣ Prompt combiné
+    # 3️⃣ Prompt combiné (strict pour HTML pur)
     prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
 Traduis fidèlement tout le contenu visible en {target_lang}.
@@ -63,6 +64,9 @@ Utilise le texte OCR fourni ci-dessous pour compléter les zones floues ou diffi
 Reproduis la mise en page et la structure exacte : titres, paragraphes, tableaux, tampons, signatures.
 Conserve toutes les colonnes/lignes des tableaux, même vides (utilise <td>&nbsp;</td> si nécessaire).
 Ne saute aucun élément.
+⚠️ IMPORTANT : Retourne UNIQUEMENT le contenu traduit au format HTML valide.
+Pas d'explication, pas de phrase d'introduction, pas de commentaire.
+Pas de balises <html>, <head> ou <body>.
 Texte OCR extrait :
 {ocr_text}
 """
@@ -95,8 +99,21 @@ Texte OCR extrait :
     if "choices" not in data:
         return jsonify({"error": "Erreur API Claude", "details": data}), 500
 
-    markdown_text = data["choices"][0]["message"]["content"]
-    html_content = md2html(markdown_text)
+    model_output = data["choices"][0]["message"]["content"].strip()
+
+    # 5️⃣ Si sortie déjà en HTML → on garde, sinon on convertit Markdown → HTML
+    if model_output.startswith("<"):
+        html_content = model_output
+    else:
+        html_content = md2html(model_output)
+
+    # 6️⃣ Suppression auto des phrases d’introduction éventuelles
+    html_content = re.sub(
+        r'^\s*<p>(Aquí está|Voici la traduction|Here is the translation).*?</p>\s*',
+        '',
+        html_content,
+        flags=re.IGNORECASE | re.DOTALL
+    )
 
     return jsonify({
         "ocr_text": ocr_text,
