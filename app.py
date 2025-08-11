@@ -56,18 +56,23 @@ def translate():
     # 2️⃣ Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-    # 3️⃣ Prompt combiné (strict pour HTML pur)
+    # 3️⃣ Prompt amélioré : priorité à l'image pour la structure, OCR pour combler
     prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
 Traduis fidèlement tout le contenu visible en {target_lang}.
-Utilise le texte OCR fourni ci-dessous pour compléter les zones floues ou difficiles à lire.
-Reproduis la mise en page et la structure exacte : titres, paragraphes, tableaux, tampons, signatures.
-Conserve toutes les colonnes/lignes des tableaux, même vides (utilise <td>&nbsp;</td> si nécessaire).
-Ne saute aucun élément.
-⚠️ IMPORTANT : Retourne UNIQUEMENT le contenu traduit au format HTML valide.
-Pas d'explication, pas de phrase d'introduction, pas de commentaire.
-Pas de balises <html>, <head> ou <body>.
-Texte OCR extrait :
+
+⚠️ Règles obligatoires :
+- Utilise en priorité la structure visuelle de l'image pour reproduire la mise en page exacte.
+- N'utilise le texte OCR ci-dessous que pour compléter les parties floues ou difficiles à lire, sans casser la structure détectée sur l'image.
+- Respecte l'alignement d'origine (gauche, centré, droite) pour titres, paragraphes, signatures, tampons.
+- Pour chaque tableau : détecte le nombre exact de lignes et colonnes depuis l'image, puis remplis-le intégralement.
+- Inclure toutes les cellules, même vides ou avec des astérisques (*****). Si vide, mets <td>&nbsp;</td>.
+- Ne fusionne pas de cellules, ne supprime aucune ligne ou colonne.
+- Reproduis aussi tous les autres éléments visuels (mentions marginales, codes, logos, petits caractères).
+- Retourne uniquement du HTML valide (<h1>, <h2>, <p>, <table>, <thead>, <tbody>, <tr>, <th>, <td>, <strong>, <em>).
+- Aucune phrase d'introduction, aucun commentaire.
+
+Texte OCR (à utiliser uniquement pour combler les zones floues) :
 {ocr_text}
 """
 
