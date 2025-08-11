@@ -59,7 +59,8 @@ def translate():
     # 3️⃣ Prompt amélioré : priorité à l'image pour la structure, OCR pour combler
     prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-Traduis fidèlement tout le contenu visible en {target_lang}.
+⚠️ Traduis OBLIGATOIREMENT TOUT le texte en {target_lang}, même si le texte est déjà lisible.
+Aucun mot ne doit rester dans une autre langue que {target_lang}.
 
 ⚠️ Règles obligatoires :
 - Utilise en priorité la structure visuelle de l'image pour reproduire la mise en page exacte.
@@ -74,6 +75,7 @@ Traduis fidèlement tout le contenu visible en {target_lang}.
 
 Texte OCR (à utiliser uniquement pour combler les zones floues) :
 {ocr_text}
+- Chaque élément textuel (titres, paragraphes, tableaux) doit être traduit mot à mot en {target_lang}, aucun mot original ne doit subsister.
 """
 
     # 4️⃣ Appel Claude Sonnet 3.5 via OpenRouter
