@@ -67,11 +67,14 @@ def translate():
     if target_lang == "arabe":
         prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-Traduis tout le contenu en arabe, tout en conservant la mise en page exacte de l'image.
-Utilise le texte OCR fourni uniquement pour compléter les zones floues.
-Respecte le nombre exact de lignes et colonnes dans les tableaux.
-Si une cellule est vide, mets <td>&nbsp;</td>.
-Retourne uniquement du HTML valide (sans <html> ni <body>).
+⚠️ Règle impérative : chaque mot doit être traduit en arabe. 
+Aucun mot, aucune lettre latine ou française ne doit apparaître dans la traduction finale.
+- Conserve exactement la mise en page de l'image.
+- Utilise OCR uniquement pour compléter les zones floues.
+- Respecte le nombre exact de lignes et colonnes dans les tableaux.
+- Cellules vides = <td>&nbsp;</td>.
+- Retourne uniquement du HTML valide (sans <html> ni <body>).
+- Le texte final doit être intégralement en arabe.
 Texte OCR :
 {ocr_text}
 """
@@ -160,6 +163,10 @@ Texte OCR :
         html_content,
         flags=re.IGNORECASE | re.DOTALL
     )
+
+    # Filtrage post-traduction pour arabe : suppression lettres latines
+    if target_lang == "arabe":
+        html_content = re.sub(r'[A-Za-z]', '', html_content)
 
     return jsonify({
         "ocr_text": ocr_text,
