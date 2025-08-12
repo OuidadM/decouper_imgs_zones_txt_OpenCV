@@ -106,7 +106,7 @@ Texte OCR (à utiliser uniquement pour combler les zones floues) :
         ]
     }
 
-    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
     data = response.json()
 
     if "choices" not in data:
