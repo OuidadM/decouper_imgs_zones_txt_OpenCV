@@ -41,6 +41,7 @@ def extract_text_azure(image_bytes):
 
     return "\n".join(extracted_lines)
 
+
 @app.route("/translate", methods=["POST"])
 def translate():
     if "image" not in request.files:
@@ -63,18 +64,16 @@ def translate():
     # Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Prompt spécifique selon langue
+    # Prompt selon langue
     if target_lang == "arabe":
         prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-⚠️ Règle impérative : chaque mot doit être traduit en arabe. 
-Aucun mot, aucune lettre latine ou française ne doit apparaître dans la traduction finale.
-- Conserve exactement la mise en page de l'image.
-- Utilise OCR uniquement pour compléter les zones floues.
-- Respecte le nombre exact de lignes et colonnes dans les tableaux.
+⚠️ Chaque mot doit être traduit en arabe — aucun mot ou lettre latine ne doit rester.
+- Conserve la mise en page exacte.
+- Utilise OCR uniquement pour combler les zones floues.
+- Respecte le nombre exact de lignes et colonnes des tableaux.
 - Cellules vides = <td>&nbsp;</td>.
-- Retourne uniquement du HTML valide (sans <html> ni <body>).
-- Le texte final doit être intégralement en arabe.
+- Ne retourne que du HTML valide (sans <html> ni <body>).
 Texte OCR :
 {ocr_text}
 """
@@ -82,19 +81,18 @@ Texte OCR :
     else:
         prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-⚠️ Traduis OBLIGATOIREMENT TOUT le texte en {target_lang}, même si le texte est déjà lisible.
-Aucun mot ne doit rester dans une autre langue que {target_lang}.
-- Respecte l'alignement original pour titres, paragraphes, signatures.
+⚠️ Traduis tout en {target_lang}, aucun mot d'une autre langue ne doit rester.
+- Respecte l'alignement original (titres, paragraphes, signatures, tampons).
 - Les tableaux doivent conserver exactement leur nombre de lignes et colonnes.
 - Cellules vides = <td>&nbsp;</td>.
-- Ne fusionne pas de cellules, ne supprime aucune ligne ou colonne.
-- Retourne uniquement du HTML valide (sans <html> ni <body>).
+- Ne fusionne ni ne supprime de cellules.
+- Ne retourne que du HTML valide (sans <html> ni <body>).
 Texte OCR :
 {ocr_text}
 """
         max_tokens = 2000
 
-    # Appel API avec gestion des erreurs
+    # Appel API
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": "https://test.local",
@@ -126,37 +124,20 @@ Texte OCR :
         response.raise_for_status()
         data = response.json()
     except Exception as e:
-        return jsonify({"error": "Erreur réseau ou API Claude", "details": str(e)}), 500
+        return jsonify({"error": "Erreur API Claude", "details": str(e)}), 500
 
-    # Si pas de réponse du modèle, fallback GPT-4o pour arabe
     if not data.get("choices"):
-        if target_lang == "arabe":
-            payload["model"] = "openai/gpt-4o"
-            try:
-                response = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=90
-                )
-                response.raise_for_status()
-                data = response.json()
-            except Exception as e:
-                return jsonify({"error": "Erreur API fallback GPT-4o", "details": str(e)}), 500
-            if not data.get("choices"):
-                return jsonify({"error": "Pas de réponse du modèle, même en fallback"}), 502
-        else:
-            return jsonify({"error": "Pas de réponse du modèle", "details": data}), 502
+        return jsonify({"error": "Pas de réponse du modèle", "details": data}), 502
 
     model_output = data["choices"][0]["message"]["content"].strip()
 
-    # Conversion en HTML si nécessaire
+    # Si sortie déjà HTML → on garde
     if model_output.startswith("<"):
         html_content = model_output
     else:
         html_content = md2html(model_output)
 
-    # Suppression phrases d'introduction
+    # Retirer phrases d’intro
     html_content = re.sub(
         r'^\s*<p>(Aquí está|Voici la traduction|Here is the translation).*?</p>\s*',
         '',
@@ -164,7 +145,7 @@ Texte OCR :
         flags=re.IGNORECASE | re.DOTALL
     )
 
-    # Filtrage post-traduction pour arabe : suppression lettres latines
+    # 🔹 Nettoyage lettres latines → UNIQUEMENT pour arabe
     if target_lang == "arabe":
         html_content = re.sub(r'[A-Za-z]', '', html_content)
 
@@ -174,9 +155,11 @@ Texte OCR :
         "langue": target_lang
     })
 
+
 @app.route("/")
 def index():
     return "API OK - POST /translate avec image"
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
