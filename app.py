@@ -48,7 +48,13 @@ def translate():
 
     image_bytes = request.files["image"].read()
     file_name = request.args.get("nomFichier", "")
-    target_lang = "français" if file_name.startswith("FR_") else "espagnol"
+    if file_name.startswith("FR_"):
+        target_lang = "français"
+    elif file_name.startswith("AR_"):
+        target_lang = "arabe"
+    else:
+        target_lang = "espagnol"  # valeur par défaut
+
 
     # 1️⃣ OCR Azure
     ocr_text = extract_text_azure(image_bytes)
