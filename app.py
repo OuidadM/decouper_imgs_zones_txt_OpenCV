@@ -48,6 +48,8 @@ def translate():
 
     image_bytes = request.files["image"].read()
     file_name = request.args.get("nomFichier", "")
+
+    # Détection langue cible
     if file_name.startswith("FR_"):
         target_lang = "français"
     elif file_name.startswith("AR_"):
@@ -55,36 +57,41 @@ def translate():
     else:
         target_lang = "espagnol"  # valeur par défaut
 
-
-    # 1️⃣ OCR Azure
+    # OCR Azure
     ocr_text = extract_text_azure(image_bytes)
 
-    # 2️⃣ Encodage image
+    # Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-    # 3️⃣ Prompt amélioré : priorité à l'image pour la structure, OCR pour combler
-    prompt_text = f"""
+    # Prompt spécifique selon langue
+    if target_lang == "arabe":
+        prompt_text = f"""
+Voici une image d'un document administratif multilingue (français, arabe, anglais).
+Traduis tout le contenu en arabe, tout en conservant la mise en page exacte de l'image.
+Utilise le texte OCR fourni uniquement pour compléter les zones floues.
+Respecte le nombre exact de lignes et colonnes dans les tableaux.
+Si une cellule est vide, mets <td>&nbsp;</td>.
+Retourne uniquement du HTML valide (sans <html> ni <body>).
+Texte OCR :
+{ocr_text}
+"""
+        max_tokens = 1200
+    else:
+        prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
 ⚠️ Traduis OBLIGATOIREMENT TOUT le texte en {target_lang}, même si le texte est déjà lisible.
 Aucun mot ne doit rester dans une autre langue que {target_lang}.
-
-⚠️ Règles obligatoires :
-- Utilise en priorité la structure visuelle de l'image pour reproduire la mise en page exacte.
-- N'utilise le texte OCR ci-dessous que pour compléter les parties floues ou difficiles à lire, sans casser la structure détectée sur l'image.
-- Respecte l'alignement d'origine (gauche, centré, droite) pour titres, paragraphes, signatures, tampons.
-- Pour chaque tableau : détecte le nombre exact de lignes et colonnes depuis l'image, puis remplis-le intégralement.
-- Inclure toutes les cellules, même vides ou avec des astérisques (*****). Si vide, mets <td>&nbsp;</td>.
+- Respecte l'alignement original pour titres, paragraphes, signatures.
+- Les tableaux doivent conserver exactement leur nombre de lignes et colonnes.
+- Cellules vides = <td>&nbsp;</td>.
 - Ne fusionne pas de cellules, ne supprime aucune ligne ou colonne.
-- Reproduis aussi tous les autres éléments visuels (mentions marginales, codes, logos, petits caractères).
-- Retourne uniquement du HTML valide (<h1>, <h2>, <p>, <table>, <thead>, <tbody>, <tr>, <th>, <td>, <strong>, <em>).
-- Aucune phrase d'introduction, aucun commentaire.
-
-Texte OCR (à utiliser uniquement pour combler les zones floues) :
+- Retourne uniquement du HTML valide (sans <html> ni <body>).
+Texte OCR :
 {ocr_text}
-- Chaque élément textuel (titres, paragraphes, tableaux) doit être traduit mot à mot en {target_lang}, aucun mot original ne doit subsister.
 """
+        max_tokens = 2000
 
-    # 4️⃣ Appel Claude Sonnet 3.5 via OpenRouter
+    # Appel API avec gestion des erreurs
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": "https://test.local",
@@ -94,7 +101,7 @@ Texte OCR (à utiliser uniquement pour combler les zones floues) :
 
     payload = {
         "model": "anthropic/claude-3.5-sonnet",
-        "max_tokens": 2000,
+        "max_tokens": max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -106,21 +113,47 @@ Texte OCR (à utiliser uniquement pour combler les zones floues) :
         ]
     }
 
-    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
-    data = response.json()
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=90
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return jsonify({"error": "Erreur réseau ou API Claude", "details": str(e)}), 500
 
-    if "choices" not in data:
-        return jsonify({"error": "Erreur API Claude", "details": data}), 500
+    # Si pas de réponse du modèle, fallback GPT-4o pour arabe
+    if not data.get("choices"):
+        if target_lang == "arabe":
+            payload["model"] = "openai/gpt-4o"
+            try:
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=90
+                )
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                return jsonify({"error": "Erreur API fallback GPT-4o", "details": str(e)}), 500
+            if not data.get("choices"):
+                return jsonify({"error": "Pas de réponse du modèle, même en fallback"}), 502
+        else:
+            return jsonify({"error": "Pas de réponse du modèle", "details": data}), 502
 
     model_output = data["choices"][0]["message"]["content"].strip()
 
-    # 5️⃣ Si sortie déjà en HTML → on garde, sinon on convertit Markdown → HTML
+    # Conversion en HTML si nécessaire
     if model_output.startswith("<"):
         html_content = model_output
     else:
         html_content = md2html(model_output)
 
-    # 6️⃣ Suppression auto des phrases d’introduction éventuelles
+    # Suppression phrases d'introduction
     html_content = re.sub(
         r'^\s*<p>(Aquí está|Voici la traduction|Here is the translation).*?</p>\s*',
         '',
