@@ -41,7 +41,6 @@ def extract_text_azure(image_bytes):
 
     return "\n".join(extracted_lines)
 
-
 @app.route("/translate", methods=["POST"])
 def translate():
     if "image" not in request.files:
@@ -56,7 +55,7 @@ def translate():
     elif file_name.startswith("AR_"):
         target_lang = "arabe"
     else:
-        target_lang = "espagnol"  # valeur par défaut
+        target_lang = "espagnol"
 
     # OCR Azure
     ocr_text = extract_text_azure(image_bytes)
@@ -64,33 +63,33 @@ def translate():
     # Encodage image
     image_data = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Prompt selon langue
+    # Prompt selon langue (sans HTML)
     if target_lang == "arabe":
         prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
 ⚠️ Chaque mot doit être traduit en arabe — aucun mot ou lettre latine ne doit rester.
-- Conserve la mise en page exacte.
-- Utilise OCR uniquement pour combler les zones floues.
-- Respecte le nombre exact de lignes et colonnes des tableaux.
-- Cellules vides = <td>&nbsp;</td>.
-- Ne retourne que du HTML valide (sans <html> ni <body>).
+- Reproduis exactement la mise en page de l'image, mais en texte brut.
+- Utilise les espaces, tabulations et retours à la ligne pour aligner le texte comme sur l'image.
+- Conserve tous les éléments visuels : titres, paragraphes, colonnes, tableaux (en texte), signatures, tampons.
+- N'ajoute pas de balises HTML, pas de Markdown, pas de codes de formatage.
+- Utilise l'OCR ci-dessous uniquement pour combler les zones floues.
+
 Texte OCR :
 {ocr_text}
 """
-        max_tokens = 1200
     else:
         prompt_text = f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-⚠️ Traduis tout en {target_lang}, aucun mot d'une autre langue ne doit rester.
-- Respecte l'alignement original (titres, paragraphes, signatures, tampons).
-- Les tableaux doivent conserver exactement leur nombre de lignes et colonnes.
-- Cellules vides = <td>&nbsp;</td>.
-- Ne fusionne ni ne supprime de cellules.
-- Ne retourne que du HTML valide (sans <html> ni <body>).
+⚠️ Traduis intégralement en {target_lang}.
+- Reproduis exactement la mise en page de l'image, mais en texte brut.
+- Utilise les espaces, tabulations et retours à la ligne pour aligner le texte comme sur l'image.
+- Conserve tous les éléments visuels : titres, paragraphes, colonnes, tableaux (en texte), signatures, tampons.
+- N'ajoute pas de balises HTML, pas de Markdown, pas de codes de formatage.
+- Utilise l'OCR ci-dessous uniquement pour combler les zones floues.
+
 Texte OCR :
 {ocr_text}
 """
-        max_tokens = 2000
 
     # Appel API
     headers = {
@@ -102,7 +101,7 @@ Texte OCR :
 
     payload = {
         "model": "anthropic/claude-3.5-sonnet",
-        "max_tokens": max_tokens,
+        "max_tokens": 3000,
         "messages": [
             {
                 "role": "user",
@@ -119,7 +118,7 @@ Texte OCR :
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=90
+            timeout=120
         )
         response.raise_for_status()
         data = response.json()
@@ -131,35 +130,12 @@ Texte OCR :
 
     model_output = data["choices"][0]["message"]["content"].strip()
 
-    # Si sortie déjà HTML → on garde
-    if model_output.startswith("<"):
-        html_content = model_output
-    else:
-        html_content = md2html(model_output)
-
-    # Retirer phrases d’intro
-    html_content = re.sub(
-        r'^\s*<p>(Aquí está|Voici la traduction|Here is the translation).*?</p>\s*',
-        '',
-        html_content,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    # 🔹 Nettoyage lettres latines → UNIQUEMENT pour arabe
+    # 🔹 Pour l'arabe : supprimer toute lettre latine résiduelle
     if target_lang == "arabe":
-        html_content = re.sub(r'[A-Za-z]', '', html_content)
+        model_output = re.sub(r'[A-Za-z]', '', model_output)
 
     return jsonify({
         "ocr_text": ocr_text,
-        "html": html_content,
+        "texte": model_output,
         "langue": target_lang
     })
-
-
-@app.route("/")
-def index():
-    return "API OK - POST /translate avec image"
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
