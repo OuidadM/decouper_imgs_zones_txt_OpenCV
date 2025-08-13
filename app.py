@@ -4,23 +4,26 @@ from azure.cognitiveservices.vision.computervision.models import OperationStatus
 from msrest.authentication import CognitiveServicesCredentials
 from markdown2 import markdown as md2html
 import requests
+import openai
 import os
 import io
 import time
 import base64
 import re
 
+# -------------------- CONFIG --------------------
 app = Flask(__name__)
 
-# Variables d'environnement
 AZURE_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_VISION_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
-# Client Azure Computer Vision
 cv_client = ComputerVisionClient(AZURE_ENDPOINT, CognitiveServicesCredentials(AZURE_KEY))
 
-# OCR Azure
+
+# -------------------- OCR --------------------
 def extract_text_azure(image_bytes):
     image_stream = io.BytesIO(image_bytes)
     response = cv_client.read_in_stream(image=image_stream, raw=True)
@@ -33,73 +36,47 @@ def extract_text_azure(image_bytes):
             break
         time.sleep(1)
 
-    extracted_lines = []
+    lines = []
     if result.status == OperationStatusCodes.succeeded:
         for page in result.analyze_result.read_results:
             for line in page.lines:
-                extracted_lines.append(line.text)
+                lines.append(line.text)
 
-    return "\n".join(extracted_lines)
+    return "\n".join(lines)
 
-@app.route("/translate", methods=["POST"])
-def translate():
-    if "image" not in request.files:
-        return jsonify({"error": "Image file is missing"}), 400
 
-    image_bytes = request.files["image"].read()
-    file_name = request.args.get("nomFichier", "")
-
-    # Détection langue cible
-    if file_name.startswith("FR_"):
-        target_lang = "français"
-    elif file_name.startswith("AR_"):
-        target_lang = "arabe"
-    else:
-        target_lang = "espagnol"  # valeur par défaut
-
-    # OCR Azure
-    ocr_text = extract_text_azure(image_bytes)
-
-    # Encodage image
-    image_data = base64.b64encode(image_bytes).decode("utf-8")
-
-    # Prompt selon langue
-    if target_lang == "arabe":
-        prompt_text = f"""
+# -------------------- PROMPT TEMPLATE --------------------
+def build_prompt(target_lang, ocr_text):
+    return f"""
 Voici une image d'un document administratif multilingue (français, arabe, anglais).
-⚠️ Chaque mot doit être traduit en arabe — aucun mot ou lettre latine ne doit rester.
-⚠️ Aucun texte ne doit être résumé, remplacé par "..." ou "[باقي النص]" — tout le contenu visible sur l'image doit être intégralement traduit et restitué.
-- Conserve exactement la mise en page de l'image (titres, paragraphes, tableaux, signatures).
-- Utilise OCR uniquement pour combler les zones floues.
-- Respecte le nombre exact de lignes et colonnes dans les tableaux.
-- Cellules vides = <td>&nbsp;</td>.
-- Retourne uniquement du HTML valide (sans <html> ni <body>).
-Texte OCR :
-{ocr_text}
-"""
-        max_tokens = 1200
-    else:
-        prompt_text = f"""
-Voici une image d'un document administratif multilingue (français, arabe, anglais).
-⚠️ Traduis tout en {target_lang}, aucun mot d'une autre langue ne doit rester.
-- Respecte l'alignement original (titres, paragraphes, signatures, tampons).
-- Les tableaux doivent conserver exactement leur nombre de lignes et colonnes.
-- Cellules vides = <td>&nbsp;</td>.
-- Ne fusionne ni ne supprime de cellules.
-- Retourne uniquement du HTML valide (sans <html> ni <body>).
-Texte OCR :
-{ocr_text}
-"""
-        max_tokens = 2000
+⚠️ Traduis OBLIGATOIREMENT TOUT le texte en {target_lang}, même si le texte est déjà lisible.
+Aucun mot ne doit rester dans une autre langue que {target_lang}.
 
-    # Appel API
+⚠️ Règles obligatoires :
+- Utilise en priorité la structure visuelle de l'image pour reproduire la mise en page exacte.
+- N'utilise le texte OCR ci-dessous que pour compléter les parties floues ou difficiles à lire, sans casser la structure détectée sur l'image.
+- Respecte l'alignement d'origine (gauche, centré, droite) pour titres, paragraphes, signatures, tampons.
+- Pour chaque tableau : détecte le nombre exact de lignes et colonnes depuis l'image, puis remplis-le intégralement.
+- Inclure toutes les cellules, même vides ou avec des astérisques (*****). Si vide, mets <td>&nbsp;</td>.
+- Ne fusionne pas de cellules, ne supprime aucune ligne ou colonne.
+- Reproduis aussi tous les autres éléments visuels (mentions marginales, codes, logos, petits caractères).
+- Retourne uniquement du HTML valide (<h1>, <h2>, <p>, <table>, <thead>, <tbody>, <tr>, <th>, <td>, <strong>, <em>).
+- Aucune phrase d'introduction, aucun commentaire.
+
+Texte OCR (à utiliser uniquement pour combler les zones floues) :
+{ocr_text}
+- Chaque élément textuel (titres, paragraphes, tableaux) doit être traduit mot à mot en {target_lang}, aucun mot original ne doit subsister.
+"""
+
+
+# -------------------- TRADUCTION CLAUDE --------------------
+def translate_with_claude(image_data, prompt_text, max_tokens=2000):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": "https://test.local",
         "X-Title": "Traduction Document",
         "Content-Type": "application/json"
     }
-
     payload = {
         "model": "anthropic/claude-3.5-sonnet",
         "max_tokens": max_tokens,
@@ -113,44 +90,65 @@ Texte OCR :
             }
         ]
     }
+    r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=90)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
 
-    try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=90
-        )
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        return jsonify({"error": "Erreur API Claude", "details": str(e)}), 500
 
-    if not data.get("choices"):
-        return jsonify({"error": "Pas de réponse du modèle", "details": data}), 502
+# -------------------- TRADUCTION GPT-4o --------------------
+def translate_with_gpt4o(ocr_text, target_lang):
+    prompt_text = build_prompt(target_lang, ocr_text)
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "user", "content": prompt_text}
+        ],
+        max_tokens=2000
+    )
+    return response.choices[0].message.content.strip()
 
-    model_output = data["choices"][0]["message"]["content"].strip()
 
-    # 🔹 Nettoyage du résultat
+# -------------------- ROUTE API --------------------
+@app.route("/translate", methods=["POST"])
+def translate():
+    if "image" not in request.files:
+        return jsonify({"error": "Image file is missing"}), 400
+
+    # Lecture fichier
+    image_bytes = request.files["image"].read()
+    file_name = request.args.get("nomFichier", "")
+
+    # Détection langue
+    if file_name.startswith("FR_"):
+        target_lang = "français"
+    elif file_name.startswith("AR_"):
+        target_lang = "arabe"
+    else:
+        target_lang = "espagnol"
+
+    # OCR
+    ocr_text = extract_text_azure(image_bytes)
+    image_data = base64.b64encode(image_bytes).decode("utf-8")
+
+    # Traduction selon langue
+    if file_name.startswith("AR_"):
+        model_output = translate_with_gpt4o(ocr_text, target_lang)
+    else:
+        prompt_text = build_prompt(target_lang, ocr_text)
+        model_output = translate_with_claude(image_data, prompt_text)
+
+    # Conversion HTML
     html_content = model_output.strip()
-
-    # Si sortie pas HTML → conversion
     if not html_content.startswith("<"):
         html_content = md2html(html_content)
 
-    # Suppression phrases d'intro et "suite du texte"
+    # Nettoyage sortie
     html_content = re.sub(
         r'^\s*<p>(Aquí está|Voici la traduction|Here is the translation).*?</p>\s*',
         '',
         html_content,
         flags=re.IGNORECASE | re.DOTALL
     )
-    html_content = re.sub(r'\[باقي\s+النص[^\]]*\]', '', html_content)  # phrase arabe à supprimer
-    html_content = re.sub(r'^\s*[^\w\u0600-\u06FF]+', '', html_content)  # supprime bruit début
-
-    # Suppression lettres latines UNIQUEMENT si arabe
-    if target_lang == "arabe":
-        html_content = re.sub(r'[A-Za-z]', '', html_content)
 
     return jsonify({
         "ocr_text": ocr_text,
@@ -158,9 +156,11 @@ Texte OCR :
         "langue": target_lang
     })
 
+
 @app.route("/")
 def index():
     return "API OK - POST /translate avec image"
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
